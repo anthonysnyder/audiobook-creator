@@ -1,0 +1,69 @@
+#!/bin/bash
+
+# Check if a directory path is provided as an argument
+if [ "$#" -ne 1 ]; then
+    echo "Usage: $0 [directory path]"
+    exit 1
+fi
+
+# Use the provided directory path, ensuring it doesn't end with a slash
+folder_path="${1%/}"
+
+# Verify if the folder exists and contains MP3 files
+if [ ! -d "$folder_path" ] || ! ls "$folder_path"/*.mp3 1> /dev/null 2>&1; then
+    echo "No MP3 files found in the directory: $folder_path"
+    exit 1
+fi
+
+# Extract the folder name and use it for naming the output files
+folder_name=$(basename "$folder_path")
+
+# File paths for process files
+file_list_path="$folder_path/${folder_name}_filelist.txt"
+chapters_path="$folder_path/${folder_name}_chapters.txt"
+concatenated_path="$folder_path/${folder_name}_whole.mp3"
+output_path="$folder_path/${folder_name}.m4b"  # Final M4B matches folder name
+
+# Prepare files
+echo ";FFMETADATA1" > "$chapters_path"
+echo "" > "$file_list_path"
+
+mp3_files=("$folder_path"/*.mp3)
+total_files=${#mp3_files[@]}
+echo "Processing MP3 files..."
+total_duration_ms=0
+
+# Process each MP3 file and calculate progress
+for (( i=0; i<${total_files}; i++ )); do
+    f="${mp3_files[$i]}"
+    duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$f")
+    duration_ms=$(echo "$duration * 1000" | bc)
+    end_duration_ms=$(echo "$total_duration_ms + $duration_ms" | bc)
+
+    title="${f##*/}"
+    title="${title%.*}"
+
+    echo "[CHAPTER]" >> "$chapters_path"
+    echo "TIMEBASE=1/1000" >> "$chapters_path"
+    echo "START=$total_duration_ms" >> "$chapters_path"
+    echo "END=$end_duration_ms" >> "$chapters_path"
+    echo "title=$title" >> "$chapters_path"
+    
+    total_duration_ms=$end_duration_ms
+    echo "file '$f'" >> "$file_list_path"
+    
+    # Calculate and display progress
+    progress=$(( (i + 1) * 100 / total_files ))
+    echo -ne "Processing: ${progress}%\r"
+done
+echo -ne "\nMP3 files processed.\n"
+
+# Concatenate MP3 files
+echo "Concatenating MP3 files..."
+ffmpeg -loglevel error -f concat -safe 0 -i "$file_list_path" -c copy "$concatenated_path" && echo "Concatenation complete."
+
+# Convert to M4B
+echo "Converting to M4B format..."
+ffmpeg -loglevel error -i "$concatenated_path" -i "$chapters_path" -map_metadata 1 -map 0 -c:a aac -b:a 192k -c:v copy "$output_path" && echo "Conversion complete."
+
+echo "M4B file has been created at: $output_path"
